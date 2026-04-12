@@ -1,82 +1,87 @@
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class Student(nn.Module):
-    def __init__(self):
+    def __init__(self, input_channels=3, image_size=32, num_classes=10):
         super(Student, self).__init__()
-        self.fc1 = nn.Linear(784, 128)
-        # Fully connected layer 1
-        # Input: 784 values (flattened image)
-        # Output: 128 values
-        # Function: Linear transformation: y = Wx + b
-        # Weights: Matrix of size 128×784 + 128 biases
-        # Purpose: First feature extraction from raw pixels
 
-        self.fc2 = nn.Linear(128, 64)
-        # Fully connected layer 2
-        # Input: 128 values (from fc1)
-        # Output: 64 values
-        # Purpose: Further compression and feature abstraction
+        # CIFAR-10 images are 32x32 with 3 color channels (RGB)
+        # We'll use a deeper architecture suitable for color images
 
-        self.fc3 = nn.Linear(64, 10)
-        # Fully connected layer 3
-        # Input: 64 values (from fc2)
-        # Output: 10 values (one for each digit 0-9)
-        # Purpose: Final classification layer
+        # Convolutional layers for feature extraction
+        # Conv Layer 1: 3 → 32 channels
+        self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)  # BatchNorm for stable training
 
-        self.dropout = nn.Dropout(0.2)
-        # Dropout usage in order to prevent overfitting by forcing network to learn robust features
+        # Conv Layer 2: 32 → 64 channels
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+
+        # Conv Layer 3: 64 → 128 channels
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+
+        # Pooling layer (shared)
+        self.pool = nn.MaxPool2d(2, 2)  # Reduces size by half
+
+        # After 3 pooling layers: 32 → 16 → 8 → 4
+        # 128 channels * 4 * 4 = 2048 features
+        self.fc1 = nn.Linear(128 * 4 * 4, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.fc3 = nn.Linear(128, num_classes)
+
+        self.dropout = nn.Dropout(0.3)  # Slightly higher dropout for CIFAR
 
     def forward(self, x):
-        # Step 1: Flattening image from [batch, 1, 28, 28] to [batch, 784]
-        x = x.view(-1, 784) # squashing the image into a flat list
+        # Input: [batch, 3, 32, 32]
 
-        # Step 2: fc1 + ReLU activation + Dropout
-        x = F.relu(self.fc1(x))  # fc1: 784 → 128, then applying ReLU
-        x = self.dropout(x)  # randomly disabling 20% of neurons
+        # Conv Block 1
+        x = self.pool(F.relu(self.bn1(self.conv1(x))))  # 32 → 16
+        x = self.dropout(x)
 
-        # Step 3: fc2 + ReLU activation + Dropout
-        x = F.relu(self.fc2(x))  # fc2: 128 → 64, then applying ReLU
-        x = self.dropout(x)  # randomly disabling 20% of neurons
+        # Conv Block 2
+        x = self.pool(F.relu(self.bn2(self.conv2(x))))  # 16 → 8
+        x = self.dropout(x)
 
-        # Step 4: fc3 (no activation yet)
-        x = self.fc3(x)  # fc3: 64 → 10 (raw scores/logits)
+        # Conv Block 3
+        x = self.pool(F.relu(self.bn3(self.conv3(x))))  # 8 → 4
+        x = self.dropout(x)
 
-        # Step 5: Converting to probabilities
-        return F.log_softmax(x, dim=1)  # Output: log probabilities
+        # Flatten for fully connected layers
+        x = x.view(-1, 128 * 4 * 4)  # [batch, 2048]
 
-    # INPUT IMAGE
-    #     ↓
-    # [28×28 = 784 pixels]
-    #     ↓
-    # FC1: 784 → 128
-    #     ↓
-    # ReLU Activation
-    #     ↓
-    # Dropout (20%)
-    #     ↓
-    # FC2: 128 → 64
-    #     ↓
-    # ReLU Activation
-    #     ↓
-    # Dropout (20%)
-    #     ↓
-    # FC3: 64 → 10
-    #     ↓
-    # LogSoftmax
-    #     ↓
-    # OUTPUT: 10 probabilities (digits 0-9)
+        # Fully connected layers
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = F.relu(self.fc2(x))
+        x = self.dropout(x)
+        x = self.fc3(x)  # Raw logits
 
-    # In order to activate the usage of this neural network, the FORWARD function needs to be called.
-    # If one feeds to the FORWARD function an input image (through its pixels), then this function firstly flattens
-    # the image (because the image is fed through a 28x28 pixel format).
-    # Then the FORWARD function applies a ReLu activation function to the output of the first fully connected layer
-    # (fc1) of the Student Neural Network.
-    # Then, it applies a random 20% dropout to the output of the ReLu activation function in order to prevent overfitting.
-    # Next, the FORWARD function applies a ReLu activation function to the output of the second fully connected layer
-    # (fc2) of the Student Neural Network (that would be the output of the first dropout layer).
-    # Lastly, it applies again a random dropout of 20% to the output of the ReLu of the fc2. Then it just feeds
-    # this last dropout to the last fully connected layer (no activation function is applied here ->
-    # to the output of this layer).
-    # Finally, it applies a logsoftmax activation function (gives logarithm of probabilities)
-    # to the output of the third fully connected layer.
+        return F.log_softmax(x, dim=1)
+
+    # ARCHITECTURE VISUALIZATION:
+    #
+    # INPUT: [batch, 3, 32, 32] - Color image
+    #     ↓
+    # Conv2d(3→32, 3x3) + BatchNorm + ReLU + MaxPool(2x2)
+    #     ↓ [batch, 32, 16, 16]
+    # Dropout(0.3)
+    #     ↓
+    # Conv2d(32→64, 3x3) + BatchNorm + ReLU + MaxPool(2x2)
+    #     ↓ [batch, 64, 8, 8]
+    # Dropout(0.3)
+    #     ↓
+    # Conv2d(64→128, 3x3) + BatchNorm + ReLU + MaxPool(2x2)
+    #     ↓ [batch, 128, 4, 4]
+    # Dropout(0.3)
+    #     ↓
+    # Flatten → [batch, 2048]
+    #     ↓
+    # Linear(2048→256) + ReLU + Dropout
+    #     ↓
+    # Linear(256→128) + ReLU + Dropout
+    #     ↓
+    # Linear(128→10) + LogSoftmax
+    #     ↓
+    # OUTPUT: 10 log-probabilities (airplane, car, bird, cat, deer, dog, frog, horse, ship, truck)
